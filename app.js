@@ -359,7 +359,7 @@ function filaHTML(e, conCheck) {
     (conCheck ? '<label class="chk"><input type="checkbox" data-sel="' + esc(e.id) + '"' + (S.seleccion.has(e.id) ? ' checked' : '') + ' aria-label="Seleccionar ' + esc(e.id) + '"></label>' : '') +
     '<button class="fila-main" type="button" data-accion="ficha" data-id="' + esc(e.id) + '">' +
       '<span class="f-id">' + esc(e.id) + '</span>' +
-      '<span class="f-desc"><strong>' + esc(titulo(e)) + '</strong><small>' + esc(e.categoria || 'Sin categoría') + (e.codigo ? ' / ' + esc(e.codigo) : '') + '</small></span>' +
+      '<span class="f-desc"><strong>' + esc(titulo(e)) + '</strong></span>' +
       '<span class="f-cant">' + (Number(e.cantidad) > 1 ? '×' + esc(e.cantidad) : '') + '</span>' +
       '<span class="f-ubi">' + esc(e.ubicacion || 'Sin ubicación') + '</span>' +
       '<span class="f-est">' + estadoHTML(e.estado) + '</span>' +
