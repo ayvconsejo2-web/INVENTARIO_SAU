@@ -68,7 +68,9 @@ function normalizarId(v) {
   return m ? S.prefijo + String(Number(m[1])).padStart(6, '0') : s;
 }
 
-function titulo(e) { return [e.marca, e.modelo].filter(Boolean).join(' ') || e.codigo || e.categoria || e.id; }
+function titulo(e) {
+  return [e.descripcion, e.marca, e.modelo].filter(Boolean).join(' ') || e.codigo || e.categoria || e.id;
+}
 function porId(a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; }
 
 /* ───────────────────────── Servidor ───────────────────────── */
@@ -279,7 +281,7 @@ function setBusy(form, on) {
 
 /* ───────────────────────── Piezas de interfaz ───────────────────────── */
 
-function estadoHTML(est) { return est ? '<span class="est est-' + slug(est) + '"><i></i>' + esc(est) + '</span>' : ''; }
+function estadoHTML(est) { return '<span class="est est-' + (est ? slug(est) : 'sin') + '"><i></i>' + esc(est || 'Sin evaluar') + '</span>'; }
 function situacionHTML(sit) { return sit ? '<span class="sit sit-' + slug(sit) + '">' + esc(sit) + '</span>' : ''; }
 
 const qrCache = new Map();
@@ -407,14 +409,19 @@ function construirFiltros() {
 }
 
 function renderFiltros() {
-  const defs = { categoria: ['Todas las categorías', S.categorias], ubicacion: ['Todas las ubicaciones', S.ubicaciones],
-                 situacion: ['Toda situación', S.situaciones], estado: ['Todo estado', S.estados] };
+  const pares = lista => lista.map(x => [x, x]);
+  const defs = {
+    categoria: ['Todas las categorías', pares(S.categorias)],
+    ubicacion: ['Todas las ubicaciones', pares(S.ubicaciones)],
+    situacion: ['Toda situación', pares(S.situaciones)],
+    estado: ['Todo estado', [['__sin', 'Sin evaluar']].concat(pares(S.estados))]
+  };
   $$('select[data-filtro]').forEach(sel => {
     const k = sel.dataset.filtro, c = sel.dataset.campo;
     const d = defs[c];
     const actual = S.filtros[k][c];
     sel.innerHTML = '<option value="">' + d[0] + '</option>' +
-      d[1].map(v => '<option value="' + esc(v) + '"' + (v === actual ? ' selected' : '') + '>' + esc(v) + '</option>').join('');
+      d[1].map(v => '<option value="' + esc(v[0]) + '"' + (v[0] === actual ? ' selected' : '') + '>' + esc(v[1]) + '</option>').join('');
   });
 }
 
@@ -425,9 +432,10 @@ function filtrar(k) {
     if (f.categoria && e.categoria !== f.categoria) return false;
     if (f.ubicacion && e.ubicacion !== f.ubicacion) return false;
     if (f.situacion && e.situacion !== f.situacion) return false;
-    if (f.estado && e.estado !== f.estado) return false;
+    if (f.estado === '__sin') { if (e.estado) return false; }
+    else if (f.estado && e.estado !== f.estado) return false;
     if (!tokens.length) return true;
-    const b = sinTildes([e.id, e.codigo, e.categoria, e.marca, e.modelo, e.serie, e.ubicacion, e.segundo, e.oc, e.fc, e.maestro, e.notas].join(' '));
+    const b = sinTildes([e.id, e.codigo, e.descripcion, e.categoria, e.marca, e.modelo, e.serie, e.ubicacion, e.segundo, e.oc, e.fc, e.maestro, e.notas].join(' '));
     return tokens.every(t => b.indexOf(t) >= 0);
   });
 }
@@ -594,6 +602,13 @@ function selector(label, name, opciones, valor, cls) {
     opciones.map(o => '<option' + (o === valor ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select></label>';
 }
 
+function selectorEstado(label, name, valor) {
+  const ops = [['', 'Sin evaluar']].concat(S.estados.map(x => [x, x]));
+  return '<label class="campo"><span>' + esc(label) + '</span><select name="' + name + '">' +
+    ops.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === valor ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') +
+    '</select></label>';
+}
+
 function formEquipo(e, o) {
   o = o || {};
   const v = e || {};
@@ -606,13 +621,14 @@ function formEquipo(e, o) {
     '<h2>' + (esNuevo ? 'Nuevo equipo' : 'Editar ' + esc(v.id)) + '</h2>' +
     '<div class="grid-form">' +
       campo('Código interno', 'codigo', v.codigo) +
+      campo('Descripción', 'descripcion', v.descripcion, { cls: 'ancho' }) +
       campo('Categoría', 'categoria', v.categoria, { list: 'lista-categorias' }) +
       campo('Marca', 'marca', v.marca) +
       campo('Modelo', 'modelo', v.modelo) +
       campo('N° de serie', 'serie', v.serie) +
       campo('Cantidad', 'cantidad', v.cantidad || 1, { type: 'number', attrs: 'min="1" step="1" inputmode="numeric"' }) +
       campo('Ubicación', 'ubicacion', v.ubicacion, { list: 'lista-ubicaciones' }) +
-      selector('Estado', 'estado', S.estados, v.estado || 'Bueno') +
+      selectorEstado('Estado', 'estado', v.estado === undefined ? 'Bueno' : v.estado) +
       selector('Situación', 'situacion', S.situaciones, v.situacion || 'Operativo') +
       campo('Segundo responsable (quién lo tiene prestado)', 'segundo', v.segundo, { cls: 'campo-segundo' }) +
       fechaCampo +
@@ -873,7 +889,7 @@ async function accion(btn) {
         abrirDlg(formSimple('devolver', id, 'Devolver ' + esc(id),
           '<p class="suave">' + esc(titulo(e)) + '. Lo tiene ' + esc(e.segundo || 'otra persona') + '.</p>' +
           campo('Ubicación al volver', 'ubicacion', '', { list: 'lista-ubicaciones', req: true }) +
-          selector('Estado al volver', 'estado', S.estados, e.estado), 'Registrar devolución'));
+          selectorEstado('Estado al volver', 'estado', e.estado || ''), 'Registrar devolución'));
       }
       break;
     case 'dividir':

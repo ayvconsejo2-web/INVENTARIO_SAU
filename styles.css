@@ -205,6 +205,8 @@ main { padding-bottom: 5.5rem; }
 .est-regular { color: var(--regular); }
 .est-bueno { color: var(--bueno); }
 .est-excelente { color: var(--excelente); }
+.est-sin { color: var(--tinta-2); }
+.est-sin i { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
 
 .sit { display: inline-block; padding: .1rem .6rem; border-radius: 99px; font-size: .88rem; font-weight: 500; border: 1.5px solid var(--linea); white-space: nowrap; }
 .sit-prestado { background: var(--marca); border-color: var(--marca); color: var(--sobre-marca); }
