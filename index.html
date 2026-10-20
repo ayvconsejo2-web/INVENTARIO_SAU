@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Inventario SAU</title>
+  <meta name="theme-color" content="#F6F7F8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1B232C" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-escanear" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16"/></symbol>
+  <symbol id="i-lista" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-etiqueta" viewBox="0 0 24 24"><path d="M3 5h11l7 7-7 7H3z"/><circle cx="8" cy="12" r="1.2"/></symbol>
+  <symbol id="i-camara" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+  <symbol id="i-refrescar" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4M4 5v4h4M4 13a8 8 0 0 0 14 4M20 19v-4h-4"/></symbol>
+  <symbol id="i-usuario" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></symbol>
+</svg>
+
+<!-- Primer ingreso en este dispositivo -->
+<section id="acceso" hidden>
+  <div>
+    <h1>Inventario SAU</h1>
+    <p class="suave">Servicios audiovisuales. Ingresá el PIN para ver y registrar equipos desde este dispositivo.</p>
+  </div>
+  <form id="formAcceso" autocomplete="off">
+    <label class="campo" id="campoUrl" hidden>
+      <span>Dirección del script (la URL que termina en /exec)</span>
+      <input name="apiUrl" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec">
+    </label>
+    <label class="campo">
+      <span>Tu nombre (queda en el historial de movimientos)</span>
+      <input name="usuario" type="text" required maxlength="60" autocomplete="name">
+    </label>
+    <label class="campo">
+      <span>PIN</span>
+      <input name="pin" type="password" required autocomplete="current-password">
+    </label>
+    <p class="error" id="errorAcceso" role="alert" hidden></p>
+    <button class="btn" type="submit" id="btnAcceso">Entrar</button>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <header class="barra">
+    <div class="marca"><b>Inventario SAU</b><span>Servicios audiovisuales</span></div>
+    <nav class="nav-pc" aria-label="Secciones">
+      <a href="#/escanear" data-vista="escanear"><svg class="icono"><use href="#i-escanear"/></svg>Escanear</a>
+      <a href="#/inventario" data-vista="inventario"><svg class="icono"><use href="#i-lista"/></svg>Inventario</a>
+      <a href="#/etiquetas" data-vista="etiquetas"><svg class="icono"><use href="#i-etiqueta"/></svg>Etiquetas</a>
+    </nav>
+    <div class="estado-sync" id="estadoSync" role="status"><i></i><span>Sin datos</span></div>
+    <button class="btn sec chico" data-accion="actualizar" title="Actualizar datos" aria-label="Actualizar datos"><svg class="icono"><use href="#i-refrescar"/></svg></button>
+    <button class="btn sec chico" data-accion="sesion" title="Sesión" aria-label="Sesión"><svg class="icono"><use href="#i-usuario"/></svg></button>
+  </header>
+
+  <main>
+    <!-- Escanear -->
+    <section id="vista-escanear" class="vista">
+      <div class="modo" role="group" aria-label="Modo de escaneo">
+        <button type="button" data-modo="consulta" aria-pressed="true">Consulta</button>
+        <button type="button" data-modo="relevamiento" aria-pressed="false">Relevamiento</button>
+      </div>
+
+      <div class="rel-panel" id="relPanel" hidden>
+        <label class="rel-ubi">
+          <span>Ubicación que estás relevando</span>
+          <input id="relUbi" class="inline-input" list="lista-ubicaciones" placeholder="Elegí o escribí una ubicación" autocomplete="off">
+        </label>
+        <div class="rel-cifras" id="relCifras"></div>
+        <div class="acciones" id="relAcciones"></div>
+        <div id="relFaltan"></div>
+      </div>
+
+      <form id="formScan" class="scan-caja" autocomplete="off">
+        <label for="scanInput">Código del equipo</label>
+        <input id="scanInput" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Escaneá la etiqueta o escribí el número">
+        <div class="scan-acciones">
+          <button class="btn" type="submit">Buscar</button>
+          <button class="btn sec" type="button" id="btnCamara" data-accion="camara"><svg class="icono"><use href="#i-camara"/></svg><span>Cámara</span></button>
+        </div>
+      </form>
+      <div id="visor" hidden></div>
+
+      <div id="resultadoScan"></div>
+      <div id="sesionScan" class="sesion"></div>
+    </section>
+
+    <!-- Inventario -->
+    <section id="vista-inventario" class="vista" hidden>
+      <div class="vista-cab">
+        <h1>Inventario</h1>
+        <button class="btn" data-accion="nuevo">Nuevo equipo</button>
+      </div>
+      <div class="filtros" data-filtros="inv"></div>
+      <p class="conteo" id="conteoInv" role="status"></p>
+      <div class="lista" id="listaInv"></div>
+    </section>
+
+    <!-- Etiquetas -->
+    <section id="vista-etiquetas" class="vista" hidden>
+      <div class="vista-cab">
+        <h1>Etiquetas</h1>
+        <button class="btn" id="btnImprimir" data-accion="imprimir">Imprimir etiquetas</button>
+      </div>
+
+      <div class="panel">
+        <h2>Formato</h2>
+        <div class="form-fila">
+          <label class="campo"><span>Tamaño</span>
+            <select id="fmtPreset"></select>
+          </label>
+          <label class="campo" id="fmtAnchoW"><span>Ancho (mm)</span><input id="fmtAncho" type="number" min="20" max="200" step="1"></label>
+          <label class="campo" id="fmtAltoW"><span>Alto (mm)</span><input id="fmtAlto" type="number" min="15" max="150" step="1"></label>
+          <label class="chk-linea"><input id="fmtTexto" type="checkbox" checked>Incluir marca y modelo</label>
+        </div>
+        <p class="suave" id="fmtNota"></p>
+        <div class="prev" id="prevEtq" aria-label="Vista previa"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Qué imprimir</h2>
+        <div class="barra-sel">
+          <b id="selCont">0</b><span class="suave">seleccionados</span>
+          <button class="btn sec chico" data-accion="sel-filtrados">Seleccionar los filtrados</button>
+          <button class="btn sec chico" data-accion="sel-ninguno">Quitar todos</button>
+        </div>
+        <div class="filtros" data-filtros="et"></div>
+        <p class="conteo" id="conteoEt"></p>
+        <div class="lista" id="listaEt"></div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="nav-mov" aria-label="Secciones">
+    <a href="#/escanear" data-vista="escanear"><svg class="icono"><use href="#i-escanear"/></svg>Escanear</a>
+    <a href="#/inventario" data-vista="inventario"><svg class="icono"><use href="#i-lista"/></svg>Inventario</a>
+    <a href="#/etiquetas" data-vista="etiquetas"><svg class="icono"><use href="#i-etiqueta"/></svg>Etiquetas</a>
+  </nav>
+</div>
+
+<datalist id="lista-categorias"></datalist>
+<datalist id="lista-ubicaciones"></datalist>
+
+<dialog id="dlg" aria-modal="true"></dialog>
+<div id="toasts" aria-live="polite"></div>
+<div id="zonaImpresion"></div>
+
+<script src="config.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script src="vendor/html5-qrcode.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

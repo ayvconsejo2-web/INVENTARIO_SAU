@@ -1,0 +1,16 @@
+{
+  "name": "Inventario SAU",
+  "short_name": "Inventario",
+  "description": "Inventario del equipamiento de Servicios audiovisuales",
+  "lang": "es-AR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#E4E7EA",
+  "theme_color": "#18212B",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
