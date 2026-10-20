@@ -533,8 +533,13 @@ function medidasEtiqueta() {
 function etiquetaHTML(e) {
   let desc = '';
   if (S.fmt.texto) {
-    const t = titulo(e);
-    desc = '<div class="d"><b>' + esc(t) + '</b>' + (e.codigo && e.codigo !== t ? '<br>' + esc(e.codigo) : '') + '</div>';
+    const mm = [e.marca, e.modelo].filter(Boolean).join(' ');
+    const principal = e.descripcion || (mm ? '' : (e.codigo || e.categoria || ''));
+    desc = '<div class="d">' +
+      (principal ? '<b>' + esc(principal) + '</b>' : '') +
+      (mm ? '<span class="mm">' + esc(mm) + '</span>' : '') +
+      (e.ubicacion ? '<span class="ub">' + esc(e.ubicacion) + '</span>' : '') +
+      '</div>';
   }
   return '<div class="etq"><div class="q">' + qrSvg(e.id) + '</div><div class="t"><div class="id">' + esc(e.id) + '</div>' + desc + '</div></div>';
 }
@@ -564,7 +569,7 @@ function renderEtiquetas() {
   prev.style.setProperty('--lh', m.h + 'mm');
   const muestra = ids.length
     ? ids.slice(0, 6).map(id => S.mapa.get(id))
-    : [{ id: S.prefijo + '000123', marca: 'Marca', modelo: 'Modelo', codigo: 'Código interno' }];
+    : [{ id: S.prefijo + '000123', descripcion: 'Descripción', marca: 'Marca', modelo: 'Modelo', ubicacion: 'Ubicación' }];
   prev.innerHTML = muestra.map(etiquetaHTML).join('') +
     (ids.length > 6 ? '<p class="suave" style="align-self:center">y ' + (ids.length - 6) + ' más</p>' : '') +
     (!ids.length ? '<p class="suave" style="align-self:center">Ejemplo. Seleccioná equipos para ver las etiquetas reales.</p>' : '');
@@ -597,6 +602,16 @@ function campo(label, name, valor, o) {
     '<input name="' + name + '" type="' + (o.type || 'text') + '" value="' + esc(valor == null ? '' : valor) + '"' +
     (o.req ? ' required' : '') + (o.list ? ' list="' + o.list + '"' : '') + (o.attrs ? ' ' + o.attrs : '') + ' autocomplete="off"></label>';
 }
+/** Campo de texto con botón de cámara que lee marca, modelo o N° de serie desde una foto. */
+function campoFoto(label, name, valor, tipo) {
+  const ayuda = { marca: 'Sacarle una foto a la marca (o a la etiqueta completa)', modelo: 'Sacarle una foto al modelo (o a la etiqueta completa)', serie: 'Sacarle una foto al número de serie (o a la etiqueta completa)' }[tipo];
+  return '<div class="campo"><span>' + esc(label) + '</span>' +
+    '<div class="con-boton"><input name="' + name + '" type="text" value="' + esc(valor || '') + '" autocomplete="off" aria-label="' + esc(label) + '">' +
+    '<button class="btn sec" type="button" data-accion="foto-campo" title="' + ayuda + '">' +
+    '<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Foto</span></button></div>' +
+    '<input type="file" accept="image/*" capture="environment" class="foto-input" data-tipo="' + tipo + '" hidden>' +
+    '<div class="foto-res" aria-live="polite" hidden></div></div>';
+}
 function selector(label, name, opciones, valor, cls) {
   return '<label class="campo ' + (cls || '') + '"><span>' + esc(label) + '</span><select name="' + name + '">' +
     opciones.map(o => '<option' + (o === valor ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select></label>';
@@ -623,9 +638,9 @@ function formEquipo(e, o) {
       campo('Código interno', 'codigo', v.codigo) +
       campo('Descripción', 'descripcion', v.descripcion, { cls: 'ancho' }) +
       campo('Categoría', 'categoria', v.categoria, { list: 'lista-categorias' }) +
-      campo('Marca', 'marca', v.marca) +
-      campo('Modelo', 'modelo', v.modelo) +
-      campo('N° de serie', 'serie', v.serie) +
+      campoFoto('Marca', 'marca', v.marca, 'marca') +
+      campoFoto('Modelo', 'modelo', v.modelo, 'modelo') +
+      campoFoto('N° de serie', 'serie', v.serie, 'serie') +
       campo('Cantidad', 'cantidad', v.cantidad || 1, { type: 'number', attrs: 'min="1" step="1" inputmode="numeric"' }) +
       campo('Ubicación', 'ubicacion', v.ubicacion, { list: 'lista-ubicaciones' }) +
       selectorEstado('Estado', 'estado', v.estado === undefined ? 'Bueno' : v.estado) +
@@ -797,6 +812,269 @@ async function registrarRelevamiento(e) {
   renderRel();
 }
 
+
+/* ───────────────────────── Foto del número de serie ───────────────────────── */
+
+const SERIE = { ocr: null, cargandoOcr: null };
+
+function cargarScript(src) {
+  return new Promise((ok, mal) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = ok;
+    el.onerror = () => mal(new Error('No se pudo cargar ' + src));
+    document.head.appendChild(el);
+  });
+}
+
+function urlAbs(rel) { return new URL(rel, document.baseURI).href; }
+
+async function motorOcr() {
+  if (SERIE.ocr) return SERIE.ocr;
+  if (!SERIE.cargandoOcr) {
+    SERIE.cargandoOcr = (async () => {
+      if (typeof Tesseract === 'undefined') await cargarScript('vendor/tesseract/tesseract.min.js');
+      const w = await Tesseract.createWorker('eng', 1, {
+        workerPath: urlAbs('vendor/tesseract/worker.min.js'),
+        corePath: urlAbs('vendor/tesseract/'),
+        langPath: urlAbs('vendor/tesseract/lang'),
+        workerBlobURL: false,
+        gzip: true
+      });
+      await w.setParameters({ tessedit_pageseg_mode: '11', preserve_interword_spaces: '1' });
+      SERIE.ocr = w;
+      return w;
+    })().catch(err => { SERIE.cargandoOcr = null; throw err; });
+  }
+  return SERIE.cargandoOcr;
+}
+
+async function imagenACanvas(file, lado) {
+  let bmp;
+  try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch (e) {
+    bmp = await new Promise((ok, mal) => {
+      const im = new Image();
+      im.onload = () => ok(im);
+      im.onerror = mal;
+      im.src = URL.createObjectURL(file);
+    });
+  }
+  const w0 = bmp.width || bmp.naturalWidth, h0 = bmp.height || bmp.naturalHeight;
+  const k = Math.min(1, lado / Math.max(w0, h0));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return c;
+}
+
+/** Escala de grises y contraste: ayuda con etiquetas plateadas o con reflejos. */
+function realzar(canvas) {
+  const ctx = canvas.getContext('2d');
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data, n = d.length / 4, hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i += 4) {
+    const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0;
+    d[i] = g; hist[g]++;
+  }
+  let acc = 0, lo = 0, hi = 255;
+  for (let g = 0; g < 256; g++) { acc += hist[g]; if (acc > n * 0.01) { lo = g; break; } }
+  acc = 0;
+  for (let g = 255; g >= 0; g--) { acc += hist[g]; if (acc > n * 0.01) { hi = g; break; } }
+  const rango = Math.max(40, hi - lo);
+  for (let i = 0; i < d.length; i += 4) {
+    const v = Math.max(0, Math.min(255, (d[i] - lo) * 255 / rango));
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+const RX_SERIE = /(?:\bs\s*\/\s*n\b|\bsn\b|\bs\.n\.?|serial(?:\s*(?:no\.?|n[°ºo]|number|num\.?))?|\bser\.?\s*(?:no\.?|n[°º])|n[°º]\s*(?:de\s*)?serie|\bserie)\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-\/.]{3,})/gi;
+const RX_MODELO = /(?:\bmodel(?:o|\s*(?:no\.?|n[°ºo]|number))?|\bmod\.?|\btype|\btipo|\bm\s*\/\s*n|\bp\s*\/\s*n|\bpart\s*(?:no\.?|number)?)\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-\/.]{2,})/gi;
+
+const MARCAS_CONOCIDAS = ['Epson', 'Sony', 'Shure', 'Sennheiser', 'Yamaha', 'Behringer', 'Blackmagic', 'Panasonic', 'Canon', 'Samsung', 'LG',
+  'Philips', 'Hikvision', 'JBL', 'Bose', 'Audio-Technica', 'Lenovo', 'HP', 'Dell', 'TP-Link', 'Chauvet', 'Roland', 'Allen & Heath', 'AKG', 'Rode',
+  'Logitech', 'Elgato', 'Datavideo', 'Teradek', 'Aputure', 'Godox', 'Manfrotto', 'Pioneer', 'Denon', 'Mackie', 'QSC', 'Crown', 'Peavey', 'Kramer',
+  'Extron', 'Crestron', 'AVer', 'Poly', 'Jabra', 'BenQ', 'Optoma', 'ViewSonic', 'NEC', 'Hitachi', 'Acer', 'Asus', 'Xiaomi', 'Google', 'Apple',
+  'Ubiquiti', 'Cisco', 'D-Link', 'Netgear', 'MikroTik', 'Seagate', 'SanDisk', 'Kingston', 'Neewer', 'Lumens', 'Marshall', 'Atomos', 'Tascam',
+  'Zoom', 'Presonus', 'Focusrite', 'Neumann', 'Electro-Voice', 'Dynacord', 'Soundcraft', 'Midas', 'Klark Teknik', 'Hollyland', 'Ecler', 'Novik'];
+
+function sinSignos(v) { return String(v).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function limpiarToken(v) { return String(v).replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/gi, '').toUpperCase(); }
+
+function marcaConocida(texto) {
+  const plano = ' ' + String(texto).toLowerCase().replace(/[^a-z0-9&]+/g, ' ') + ' ';
+  const propias = Array.from(new Set(S.equipos.map(e => e.marca).filter(Boolean)));
+  const hallazgos = [];
+  propias.concat(MARCAS_CONOCIDAS).forEach(m => {
+    const n = ' ' + String(m).toLowerCase().replace(/[^a-z0-9&]+/g, ' ').trim() + ' ';
+    if (n.trim().length >= 2 && plano.indexOf(n) >= 0 && !hallazgos.some(h => sinSignos(h) === sinSignos(m))) hallazgos.push(m);
+  });
+  return hallazgos;
+}
+
+/** Reparte el texto de una foto en candidatos para marca, modelo y N° de serie. */
+function analizarTexto(texto) {
+  const pts = { serie: new Map(), modelo: new Map(), marca: new Map() };
+  const sumar = (tipo, v, p) => { if (v) pts[tipo].set(v, Math.max(pts[tipo].get(v) || 0, p)); };
+  const malos = /^(?:MODEL|MODELO|INPUT|OUTPUT|MADE|CLASS|SERIAL|SERIE|TYPE|TIPO|WARNING|CAUTION)/;
+  const esFecha = v => /^\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(v);
+  const esElectrico = v => /^\d+([.\-\/]\d+)*(V|W|HZ|A|MA|VA|VDC|VAC|KG|MM)$/i.test(v);
+
+  const modelosEtiquetados = new Set();
+  let m;
+  RX_MODELO.lastIndex = 0;
+  while ((m = RX_MODELO.exec(texto))) {
+    const v = limpiarToken(m[1]);
+    if (v.length >= 3 && /\d/.test(v) && !esFecha(v) && !esElectrico(v)) { modelosEtiquetados.add(v); sumar('modelo', v, 20 + (v.indexOf('-') >= 0 ? 2 : 0)); }
+  }
+  RX_SERIE.lastIndex = 0;
+  const seriesEtiquetadas = new Set();
+  while ((m = RX_SERIE.exec(texto))) {
+    const v = limpiarToken(m[1]);
+    if (v.length >= 5 && v.length <= 32 && /\d/.test(v)) { seriesEtiquetadas.add(v); sumar('serie', v, 20); }
+  }
+  texto.split(/[\s|,;]+/).forEach(t => {
+    const v = limpiarToken(t);
+    if (!v || /:/.test(t) || malos.test(v) || esFecha(v) || esElectrico(v) || !/\d/.test(v)) return;
+    const mixto = /[A-Z]/.test(v) && /\d/.test(v);
+    if (v.length >= 5 && v.length <= 32 && !modelosEtiquetados.has(v)) sumar('serie', v, (mixto ? 3 : 0) + (v.length >= 8 && v.length <= 20 ? 2 : 0));
+    if (v.length >= 3 && v.length <= 20 && mixto && !seriesEtiquetadas.has(v)) sumar('modelo', v, (v.indexOf('-') >= 0 ? 3 : 0) + (v.length <= 12 ? 1 : 0));
+  });
+  // Un valor etiquetado como modelo no es el número de serie, y al revés.
+  modelosEtiquetados.forEach(v => pts.serie.delete(v));
+  seriesEtiquetadas.forEach(v => { if (!modelosEtiquetados.has(v)) pts.modelo.delete(v); });
+
+  marcaConocida(texto).forEach(mc => sumar('marca', mc, 20));
+  texto.split('\n').map(l => l.trim()).filter(l => /^[A-Za-zÁÉÍÓÚÑáéíóúñ&\-\s]{2,24}$/.test(l)).slice(0, 3).forEach(l => {
+    const v = l.replace(/\s+/g, ' ');
+    if (!/^(model|modelo|made|input|output|serial|serie|warning|caution)/i.test(v)) sumar('marca', v, 1);
+  });
+  const orden = mapa => Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]);
+  return {
+    marca: orden(pts.marca), modelo: orden(pts.modelo), serie: orden(pts.serie)
+  };
+}
+
+/** Prueba la foto entera y después recortes que se superponen: una etiqueta chica dentro de una foto grande no se detecta entera. */
+async function codigoDeBarras(file) {
+  if (typeof Html5Qrcode === 'undefined') return [];
+  let cont = $('#lectorFoto');
+  if (!cont) {
+    cont = document.createElement('div');
+    cont.id = 'lectorFoto';
+    cont.style.cssText = 'position:absolute;left:-9999px;width:300px;height:300px';
+    document.body.appendChild(cont);
+  }
+  const F = Html5QrcodeSupportedFormats;
+  const intentar = async blob => {
+    const lector = new Html5Qrcode('lectorFoto', {
+      verbose: false,
+      formatsToSupport: [F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.ITF, F.UPC_A, F.UPC_E, F.CODABAR]
+    });
+    try {
+      const r = await lector.scanFile(new File([blob], 'foto.png', { type: 'image/png' }), false);
+      return r ? String(r).trim() : '';
+    } catch (e) { return ''; }
+    finally { try { lector.clear(); } catch (e) { /* nada */ } }
+  };
+  const aBlob = c => new Promise(ok => c.toBlob(ok, 'image/png'));
+  const base = await imagenACanvas(file, 1600);
+  let r = await intentar(await aBlob(base));
+  if (r) return [r];
+  for (const n of [2, 3]) {
+    const w = Math.min(base.width, Math.round(base.width / n * 1.4)), h = Math.min(base.height, Math.round(base.height / n * 1.4));
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const t = document.createElement('canvas');
+        t.width = w; t.height = h;
+        t.getContext('2d').drawImage(base, i * (base.width - w) / (n - 1), j * (base.height - h) / (n - 1), w, h, 0, 0, w, h);
+        r = await intentar(await aBlob(t));
+        if (r) return [r];
+      }
+    }
+  }
+  return [];
+}
+
+function mostrarResultadoFoto(cont, estado, titulo_, otros, nota) {
+  cont.hidden = false;
+  cont.dataset.estado = estado;
+  let html = '';
+  if (estado === 'leyendo') {
+    html = '<span class="girando" aria-hidden="true"></span> ' + esc(nota);
+  } else if (estado === 'ok') {
+    html = '<b>' + esc(titulo_) + '</b> ' + esc(nota || '');
+    if (otros.length) {
+      html += '<div class="foto-otros"><span>¿No es ese?</span>' +
+        otros.map(v => '<button type="button" class="etiqueta-chip" data-accion="usar-foto" data-valor="' + esc(v) + '">' + esc(v) + '</button>').join('') + '</div>';
+    }
+  } else {
+    html = esc(nota);
+  }
+  cont.innerHTML = html;
+}
+
+const NOMBRE_CAMPO = { marca: 'la marca', modelo: 'el modelo', serie: 'el número de serie' };
+const ROTULO_CAMPO = { marca: 'Marca', modelo: 'Modelo', serie: 'N° de serie' };
+
+async function leerCampoDeFoto(file, campoEl, tipo) {
+  const form = campoEl.closest('form');
+  const input = campoEl.querySelector('.con-boton input');
+  const res = campoEl.querySelector('.foto-res');
+  const boton = campoEl.querySelector('[data-accion="foto-campo"]');
+  boton.disabled = true;
+  try {
+    let porBarras = [];
+    if (tipo === 'serie') {
+      mostrarResultadoFoto(res, 'leyendo', '', [], 'Buscando un código de barras…');
+      porBarras = await codigoDeBarras(file);
+    }
+    let cand;
+    if (porBarras.length) {
+      cand = { marca: [], modelo: [], serie: [[porBarras[0], 30]] };
+    } else {
+      mostrarResultadoFoto(res, 'leyendo', '', [], SERIE.ocr ? 'Leyendo el texto de la foto…' : 'Leyendo el texto de la foto. La primera vez tarda unos segundos más…');
+      const canvas = realzar(await imagenACanvas(file, 2000));
+      const w = await motorOcr();
+      const { data } = await w.recognize(canvas);
+      cand = analizarTexto(data.text || '');
+    }
+    const propios = cand[tipo].map(x => x[0]);
+    if (!propios.length) {
+      const que = tipo === 'serie' ? 'un número de serie' : tipo === 'modelo' ? 'un modelo' : 'una marca';
+      mostrarResultadoFoto(res, 'vacio', '', [], 'No encontré ' + que + ' en la foto. Probá de nuevo más cerca, con buena luz y sin reflejos, o escribilo a mano.');
+      return;
+    }
+    input.value = propios[0];
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Si la foto era de la etiqueta completa, completa también los otros casilleros que estén vacíos y tengan un dato claro.
+    const tambien = [];
+    ['marca', 'modelo', 'serie'].forEach(t => {
+      if (t === tipo || !cand[t].length || cand[t][0][1] < 20) return;
+      const otro = form && form.elements[t];
+      if (otro && !otro.value.trim()) { otro.value = cand[t][0][0]; tambien.push(ROTULO_CAMPO[t]); }
+    });
+    const porTexto = !porBarras.length;
+    const aviso = (porBarras.length ? 'Se leyó del código de barras. ' : '') +
+      (tambien.length ? 'También completé: ' + tambien.join(' y ') + '. ' : '') +
+      (porTexto ? 'El texto de una foto puede confundir O/0, I/1 o S/5: comparalo con la etiqueta antes de guardar.' : '');
+    mostrarResultadoFoto(res, 'ok', 'Leído: ' + propios[0] + '.', propios.slice(1, 5), aviso.trim());
+  } catch (err) {
+    mostrarResultadoFoto(res, 'vacio', '', [], 'No pude leer la foto' + (navigator.onLine === false && !SERIE.ocr ? ' (la primera vez necesita conexión para preparar el lector)' : '') + '. Escribí ' + NOMBRE_CAMPO[tipo] + ' a mano.');
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+document.addEventListener('change', ev => {
+  const inp = ev.target.closest && ev.target.closest('.foto-input');
+  if (!inp || !inp.files || !inp.files[0]) return;
+  leerCampoDeFoto(inp.files[0], inp.closest('.campo'), inp.dataset.tipo);
+});
+
 let ultimoCamara = { t: '', ms: 0 };
 function alLeerCamara(txt) {
   const ahora = Date.now();
@@ -864,6 +1142,13 @@ async function accion(btn) {
     case 'ficha': if (e) abrirFichaDlg(id); break;
     case 'cerrar': cerrarDlg(); break;
     case 'cancelar-form': finForm(); break;
+    case 'foto-campo': { const inp = btn.closest('.campo').querySelector('.foto-input'); inp.value = ''; inp.click(); break; }
+    case 'usar-foto': {
+      const cp = btn.closest('.campo');
+      cp.querySelector('.con-boton input').value = btn.dataset.valor;
+      cp.querySelector('.foto-res').hidden = true;
+      break;
+    }
     case 'nuevo': S.volverFicha = null; abrirDlg(formEquipo(null)); break;
     case 'editar': if (e) { volver(); abrirDlg(formEquipo(e)); } break;
     case 'mover':
