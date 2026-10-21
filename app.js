@@ -21,16 +21,15 @@ const S = {
   cfg: { apiUrl: '', pin: '', usuario: '' },
   equipos: [], mapa: new Map(),
   categorias: [], ubicaciones: [],
-  estados: ['Malo', 'Regular', 'Bueno', 'Excelente'],
-  situaciones: ['Operativo', 'Prestado', 'En reparación', 'Baja'],
+  estados: ['Operativo', 'De baja'],
   prefijo: 'SAU-',
   actualizado: '', actualizadoMs: 0, sinRed: false,
   vista: 'escanear',
   modo: 'consulta', relUbi: '', sesion: [], escaneadosIds: new Set(), verFaltan: false,
   actual: null,
   volverFicha: null,
-  filtros: { inv: { q: '', categoria: '', ubicacion: '', situacion: '', estado: '' },
-             et: { q: '', categoria: '', ubicacion: '', situacion: '', estado: '' } },
+  filtros: { inv: { q: '', categoria: '', ubicacion: '', estado: '' },
+             et: { q: '', categoria: '', ubicacion: '', estado: '' } },
   limite: { inv: 150, et: 150 },
   seleccion: new Set(),
   fmt: { preset: 'r50x30', w: 50, h: 30, texto: true },
@@ -134,7 +133,7 @@ function sumarOpciones(item) {
 function persistir() {
   guardarLS(LS.cache, {
     equipos: S.equipos, categorias: S.categorias, ubicaciones: S.ubicaciones,
-    estados: S.estados, situaciones: S.situaciones, prefijo: S.prefijo, actualizado: S.actualizado
+    estados: S.estados, prefijo: S.prefijo, actualizado: S.actualizado
   });
 }
 
@@ -143,7 +142,6 @@ function aplicarDatos(d) {
   S.categorias = (d.categorias || []).slice();
   S.ubicaciones = (d.ubicaciones || []).slice();
   if (d.estados) S.estados = d.estados;
-  if (d.situaciones) S.situaciones = d.situaciones;
   if (d.prefijo) S.prefijo = d.prefijo;
   S.equipos.forEach(sumarOpciones);
 }
@@ -281,8 +279,8 @@ function setBusy(form, on) {
 
 /* ───────────────────────── Piezas de interfaz ───────────────────────── */
 
-function estadoHTML(est) { return '<span class="est est-' + (est ? slug(est) : 'sin') + '"><i></i>' + esc(est || 'Sin evaluar') + '</span>'; }
-function situacionHTML(sit) { return sit ? '<span class="sit sit-' + slug(sit) + '">' + esc(sit) + '</span>' : ''; }
+function estadoHTML(est) { est = est === 'De baja' ? 'De baja' : 'Operativo'; return '<span class="est est-' + slug(est) + '"><i></i>' + esc(est) + '</span>'; }
+function prestadoHTML(e) { return e.segundo ? '<span class="sit sit-prestado" title="Prestado a ' + esc(e.segundo) + '">Prestado a ' + esc(e.segundo) + '</span>' : ''; }
 
 const qrCache = new Map();
 function qrSvg(texto) {
@@ -308,7 +306,7 @@ function fichaHTML(e, o) {
     '</header>';
 
   const chips =
-    '<div class="chips">' + estadoHTML(e.estado) + situacionHTML(e.situacion) +
+    '<div class="chips">' + estadoHTML(e.estado) + prestadoHTML(e) +
     (Number(e.cantidad) > 1 ? '<span class="cant">' + esc(e.cantidad) + ' unidades</span>' : '') + '</div>';
 
   const cabecera =
@@ -328,7 +326,7 @@ function fichaHTML(e, o) {
       dato('Ubicación', e.ubicacion || 'Sin ubicación') +
       dato('Código interno', e.codigo) +
       dato('Responsable', RESPONSABLE) +
-      dato('Segundo responsable', e.segundo) +
+      dato('Prestado a (segundo responsable)', e.segundo) +
       dato('N° de serie', e.serie) +
       dato('Fecha de adquisición', fechaAR(e.adquisicion)) +
       dato('Dato maestro contable', e.maestro) +
@@ -341,7 +339,7 @@ function fichaHTML(e, o) {
   const acciones =
     '<div class="acciones">' +
       '<button class="btn" type="button" data-accion="mover" data-id="' + id + '">Cambiar ubicación</button>' +
-      (e.situacion === 'Prestado'
+      (e.segundo
         ? '<button class="btn sec" type="button" data-accion="devolver" data-id="' + id + '">Devolver</button>'
         : '<button class="btn sec" type="button" data-accion="prestar" data-id="' + id + '">Prestar</button>') +
       '<button class="btn sec" type="button" data-accion="editar" data-id="' + id + '">Editar</button>' +
@@ -363,7 +361,7 @@ function filaHTML(e, conCheck) {
       '<span class="f-cant">' + (Number(e.cantidad) > 1 ? '×' + esc(e.cantidad) : '') + '</span>' +
       '<span class="f-ubi">' + esc(e.ubicacion || 'Sin ubicación') + '</span>' +
       '<span class="f-est">' + estadoHTML(e.estado) + '</span>' +
-      '<span class="f-sit">' + situacionHTML(e.situacion) + '</span>' +
+      '<span class="f-sit">' + prestadoHTML(e) + '</span>' +
     '</button></div>';
 }
 
@@ -403,7 +401,6 @@ function construirFiltros() {
       '<input class="buscar" type="search" data-filtro="' + k + '" data-campo="q" placeholder="Buscar por ID, marca, modelo, serie, ubicación" aria-label="Buscar">' +
       '<select data-filtro="' + k + '" data-campo="categoria" aria-label="Categoría"></select>' +
       '<select data-filtro="' + k + '" data-campo="ubicacion" aria-label="Ubicación"></select>' +
-      '<select data-filtro="' + k + '" data-campo="situacion" aria-label="Situación"></select>' +
       '<select data-filtro="' + k + '" data-campo="estado" aria-label="Estado"></select>';
   });
 }
@@ -413,8 +410,7 @@ function renderFiltros() {
   const defs = {
     categoria: ['Todas las categorías', pares(S.categorias)],
     ubicacion: ['Todas las ubicaciones', pares(S.ubicaciones)],
-    situacion: ['Toda situación', pares(S.situaciones)],
-    estado: ['Todo estado', [['__sin', 'Sin evaluar']].concat(pares(S.estados))]
+    estado: ['Todo estado', pares(S.estados).concat([['__prestado', 'Prestados']])]
   };
   $$('select[data-filtro]').forEach(sel => {
     const k = sel.dataset.filtro, c = sel.dataset.campo;
@@ -431,9 +427,8 @@ function filtrar(k) {
   return S.equipos.filter(e => {
     if (f.categoria && e.categoria !== f.categoria) return false;
     if (f.ubicacion && e.ubicacion !== f.ubicacion) return false;
-    if (f.situacion && e.situacion !== f.situacion) return false;
-    if (f.estado === '__sin') { if (e.estado) return false; }
-    else if (f.estado && e.estado !== f.estado) return false;
+    if (f.estado === '__prestado') { if (!e.segundo) return false; }
+    else if (f.estado && (e.estado === 'De baja' ? 'De baja' : 'Operativo') !== f.estado) return false;
     if (!tokens.length) return true;
     const b = sinTildes([e.id, e.codigo, e.descripcion, e.categoria, e.marca, e.modelo, e.serie, e.ubicacion, e.segundo, e.oc, e.fc, e.maestro, e.notas].join(' '));
     return tokens.every(t => b.indexOf(t) >= 0);
@@ -491,7 +486,7 @@ function abrirFichaDlg(id) {
 
 function faltantes() {
   if (!S.relUbi) return [];
-  return S.equipos.filter(e => e.ubicacion === S.relUbi && e.situacion !== 'Baja' && e.situacion !== 'Prestado' && !S.escaneadosIds.has(e.id));
+  return S.equipos.filter(e => e.ubicacion === S.relUbi && e.estado !== 'De baja' && !e.segundo && !S.escaneadosIds.has(e.id));
 }
 
 function renderRel() {
@@ -618,7 +613,7 @@ function selector(label, name, opciones, valor, cls) {
 }
 
 function selectorEstado(label, name, valor) {
-  const ops = [['', 'Sin evaluar']].concat(S.estados.map(x => [x, x]));
+  const ops = S.estados.map(x => [x, x]);
   return '<label class="campo"><span>' + esc(label) + '</span><select name="' + name + '">' +
     ops.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === valor ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') +
     '</select></label>';
@@ -632,7 +627,7 @@ function formEquipo(e, o) {
   const fechaCampo = v.adquisicion && !iso
     ? campo('Fecha de adquisición', 'adquisicion', v.adquisicion)
     : campo('Fecha de adquisición', 'adquisicion', v.adquisicion || '', { type: 'date' });
-  return '<form class="dlg-cont" data-form="equipo" data-id="' + esc(v.id || '') + '" data-prestado="' + (v.situacion === 'Prestado' ? 'si' : 'no') + '">' +
+  return '<form class="dlg-cont" data-form="equipo" data-id="' + esc(v.id || '') + '">' +
     '<h2>' + (esNuevo ? 'Nuevo equipo' : 'Editar ' + esc(v.id)) + '</h2>' +
     '<div class="grid-form">' +
       campo('Código interno', 'codigo', v.codigo) +
@@ -643,9 +638,8 @@ function formEquipo(e, o) {
       campoFoto('N° de serie', 'serie', v.serie, 'serie') +
       campo('Cantidad', 'cantidad', v.cantidad || 1, { type: 'number', attrs: 'min="1" step="1" inputmode="numeric"' }) +
       campo('Ubicación', 'ubicacion', v.ubicacion, { list: 'lista-ubicaciones' }) +
-      selectorEstado('Estado', 'estado', v.estado === undefined ? 'Bueno' : v.estado) +
-      selector('Situación', 'situacion', S.situaciones, v.situacion || 'Operativo') +
-      campo('Segundo responsable (quién lo tiene prestado)', 'segundo', v.segundo, { cls: 'campo-segundo' }) +
+      selectorEstado('Estado', 'estado', v.estado === 'De baja' ? 'De baja' : 'Operativo') +
+      campo('Prestado a (segundo responsable)', 'segundo', v.segundo, { attrs: 'placeholder="Dejar vacío si está en el área"' }) +
       fechaCampo +
       campo('Dato maestro contable', 'maestro', v.maestro) +
       campo('OC', 'oc', v.oc) +
@@ -685,7 +679,6 @@ async function enviarForm(f, submitter) {
       const item = Object.assign({}, val);
       delete item.modo;
       if (id) item.id = id;
-      if (item.situacion !== 'Prestado') item.segundo = '';
       const r = await api('guardar', { item: item });
       upsert(r.item);
       if (!id) {
@@ -707,16 +700,16 @@ async function enviarForm(f, submitter) {
       toast(r.pendiente ? 'Sin señal: el cambio se enviará cuando vuelva la conexión.' : 'Ubicación actualizada.');
       finForm();
     } else if (tipo === 'prestar') {
-      const item = { id: id, situacion: 'Prestado', segundo: val.segundo };
+      const item = { id: id, segundo: val.segundo };
       if (val.ubicacion) item.ubicacion = val.ubicacion;
       const r = await api('guardar', { item: item });
       upsert(r.item);
       toast('Prestado a ' + val.segundo + '.');
       finForm();
     } else if (tipo === 'devolver') {
-      const r = await api('guardar', { item: { id: id, situacion: 'Operativo', segundo: '', ubicacion: val.ubicacion, estado: val.estado } });
+      const r = await api('guardar', { item: { id: id, segundo: '', ubicacion: val.ubicacion } });
       upsert(r.item);
-      toast('Devuelto y marcado como operativo.');
+      toast('Devuelto.');
       finForm();
     } else if (tipo === 'dividir') {
       const r = await api('dividir', { id: id, cantidad: Number(val.cantidad), ubicacion: val.ubicacion });
@@ -743,13 +736,6 @@ document.addEventListener('submit', ev => {
   if (!f) return;
   ev.preventDefault();
   enviarForm(f, ev.submitter);
-});
-
-document.addEventListener('change', ev => {
-  const t = ev.target;
-  if (t.name === 'situacion' && t.form && t.form.dataset.form === 'equipo') {
-    t.form.dataset.prestado = t.value === 'Prestado' ? 'si' : 'no';
-  }
 });
 
 /* ───────────────────────── Escaneo ───────────────────────── */
@@ -798,7 +784,7 @@ async function registrarRelevamiento(e) {
   const r = await enviarEscaneo({ id: e.id, ubicacion: S.relUbi, relevamiento: true, cuando: ahoraLocal() });
   const item = S.mapa.get(e.id) || e;
   S.escaneadosIds.add(e.id);
-  const aviso = item.situacion === 'Prestado' ? 'Figura como prestado' : item.situacion === 'Baja' ? 'Figura como baja' : '';
+  const aviso = item.estado === 'De baja' ? 'Figura como baja' : item.segundo ? 'Figura como prestado' : '';
   S.sesion.unshift({
     id: e.id, titulo: titulo(item), hora: horaCorta(),
     antes: antes && antes !== S.relUbi ? antes : '', aviso: aviso, pendiente: !!r.pendiente
@@ -1164,7 +1150,7 @@ async function accion(btn) {
         volver();
         abrirDlg(formSimple('prestar', id, 'Prestar ' + esc(id),
           '<p class="suave">' + esc(titulo(e)) + '</p>' +
-          campo('Quién lo recibe', 'segundo', '', { req: true }) +
+          campo('Sector o persona que lo recibe', 'segundo', '', { req: true }) +
           campo('Dónde va (opcional)', 'ubicacion', e.ubicacion, { list: 'lista-ubicaciones' }), 'Registrar préstamo'));
       }
       break;
@@ -1172,9 +1158,8 @@ async function accion(btn) {
       if (e) {
         volver();
         abrirDlg(formSimple('devolver', id, 'Devolver ' + esc(id),
-          '<p class="suave">' + esc(titulo(e)) + '. Lo tiene ' + esc(e.segundo || 'otra persona') + '.</p>' +
-          campo('Ubicación al volver', 'ubicacion', '', { list: 'lista-ubicaciones', req: true }) +
-          selectorEstado('Estado al volver', 'estado', e.estado || ''), 'Registrar devolución'));
+          '<p class="suave">' + esc(titulo(e)) + '. Lo tiene ' + esc(e.segundo) + '.</p>' +
+          campo('Ubicación al volver', 'ubicacion', '', { list: 'lista-ubicaciones', req: true }), 'Registrar devolución'));
       }
       break;
     case 'dividir':
