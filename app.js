@@ -597,15 +597,12 @@ function campo(label, name, valor, o) {
     '<input name="' + name + '" type="' + (o.type || 'text') + '" value="' + esc(valor == null ? '' : valor) + '"' +
     (o.req ? ' required' : '') + (o.list ? ' list="' + o.list + '"' : '') + (o.attrs ? ' ' + o.attrs : '') + ' autocomplete="off"></label>';
 }
-/** Campo de texto con botón de cámara que lee marca, modelo o N° de serie desde una foto. */
+/** Campo de texto con botón de cámara que abre el escáner de etiqueta (marca, modelo o N° de serie). */
 function campoFoto(label, name, valor, tipo) {
-  const ayuda = { marca: 'Sacarle una foto a la marca (o a la etiqueta completa)', modelo: 'Sacarle una foto al modelo (o a la etiqueta completa)', serie: 'Sacarle una foto al número de serie (o a la etiqueta completa)' }[tipo];
   return '<div class="campo"><span>' + esc(label) + '</span>' +
     '<div class="con-boton"><input name="' + name + '" type="text" value="' + esc(valor || '') + '" autocomplete="off" aria-label="' + esc(label) + '">' +
-    '<button class="btn sec" type="button" data-accion="foto-campo" title="' + ayuda + '">' +
-    '<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Foto</span></button></div>' +
-    '<input type="file" accept="image/*" capture="environment" class="foto-input" data-tipo="' + tipo + '" hidden>' +
-    '<div class="foto-res" aria-live="polite" hidden></div></div>';
+    '<button class="btn sec" type="button" data-accion="foto-campo" data-tipo="' + tipo + '" title="Leer ' + esc(label.toLowerCase()) + ' con la cámara">' +
+    '<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Foto</span></button></div></div>';
 }
 function selector(label, name, opciones, valor, cls) {
   return '<label class="campo ' + (cls || '') + '"><span>' + esc(label) + '</span><select name="' + name + '">' +
@@ -902,6 +899,7 @@ function marcaConocida(texto) {
 
 /** Reparte el texto de una foto en candidatos para marca, modelo y N° de serie. */
 function analizarTexto(texto) {
+  texto = String(texto).replace(/[©®]/g, '0');
   const pts = { serie: new Map(), modelo: new Map(), marca: new Map() };
   const sumar = (tipo, v, p) => { if (v) pts[tipo].set(v, Math.max(pts[tipo].get(v) || 0, p)); };
   const malos = /^(?:MODEL|MODELO|INPUT|OUTPUT|MADE|CLASS|SERIAL|SERIE|TYPE|TIPO|WARNING|CAUTION)/;
@@ -943,8 +941,8 @@ function analizarTexto(texto) {
   };
 }
 
-/** Prueba la foto entera y después recortes que se superponen: una etiqueta chica dentro de una foto grande no se detecta entera. */
-async function codigoDeBarras(file) {
+/** Busca un código de barras en la imagen. Prueba entera y, si se pide, también recortes superpuestos (una etiqueta chica dentro de una foto grande no se detecta entera). */
+async function codigoDeBarras(canvas, conRecortes) {
   if (typeof Html5Qrcode === 'undefined') return [];
   let cont = $('#lectorFoto');
   if (!cont) {
@@ -966,9 +964,10 @@ async function codigoDeBarras(file) {
     finally { try { lector.clear(); } catch (e) { /* nada */ } }
   };
   const aBlob = c => new Promise(ok => c.toBlob(ok, 'image/png'));
-  const base = await imagenACanvas(file, 1600);
+  const base = Math.max(canvas.width, canvas.height) > 1600 ? escalarCanvas(canvas, 1600) : canvas;
   let r = await intentar(await aBlob(base));
   if (r) return [r];
+  if (!conRecortes) return [];
   for (const n of [2, 3]) {
     const w = Math.min(base.width, Math.round(base.width / n * 1.4)), h = Math.min(base.height, Math.round(base.height / n * 1.4));
     for (let j = 0; j < n; j++) {
@@ -984,82 +983,288 @@ async function codigoDeBarras(file) {
   return [];
 }
 
-function mostrarResultadoFoto(cont, estado, titulo_, otros, nota) {
-  cont.hidden = false;
-  cont.dataset.estado = estado;
-  let html = '';
-  if (estado === 'leyendo') {
-    html = '<span class="girando" aria-hidden="true"></span> ' + esc(nota);
-  } else if (estado === 'ok') {
-    html = '<b>' + esc(titulo_) + '</b> ' + esc(nota || '');
-    if (otros.length) {
-      html += '<div class="foto-otros"><span>¿No es ese?</span>' +
-        otros.map(v => '<button type="button" class="etiqueta-chip" data-accion="usar-foto" data-valor="' + esc(v) + '">' + esc(v) + '</button>').join('') + '</div>';
-    }
-  } else {
-    html = esc(nota);
-  }
-  cont.innerHTML = html;
-}
+/* ───────────────────────── Escáner de etiqueta ─────────────────────────
+   Cámara en vivo con recuadro de encuadre. Al capturar se lee el texto (varias pasadas) y se muestra la foto
+   con las palabras tocables: se elige el casillero (marca, modelo o serie) y se toca la palabra que corresponde. */
 
-const NOMBRE_CAMPO = { marca: 'la marca', modelo: 'el modelo', serie: 'el número de serie' };
+const ESC = { stream: null, track: null, form: null, tipo: 'serie', activo: 'serie', slots: { marca: '', modelo: '', serie: '' }, cand: { marca: [], modelo: [], serie: [] }, ocupado: false };
 const ROTULO_CAMPO = { marca: 'Marca', modelo: 'Modelo', serie: 'N° de serie' };
+const dlgEsc = () => $('#dlgEscaner');
 
-async function leerCampoDeFoto(file, campoEl, tipo) {
+function escalarCanvas(c, lado) {
+  const k = lado / Math.max(c.width, c.height);
+  const o = document.createElement('canvas');
+  o.width = Math.max(1, Math.round(c.width * k)); o.height = Math.max(1, Math.round(c.height * k));
+  const x = o.getContext('2d');
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(c, 0, 0, o.width, o.height);
+  return o;
+}
+
+/** Umbral adaptativo: separa el texto aunque la luz sea despareja (reflejos, sombras). */
+function binarizar(canvas) {
+  const w = canvas.width, h = canvas.height, ctx = canvas.getContext('2d');
+  const img = ctx.getImageData(0, 0, w, h), d = img.data;
+  const W1 = w + 1, I = new Float64Array(W1 * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let fila = 0;
+    for (let x = 0; x < w; x++) { fila += d[(y * w + x) * 4]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + fila; }
+  }
+  const r = 20;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(h - 1, y + r);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(w - 1, x + r);
+      const suma = I[(y1 + 1) * W1 + x1 + 1] - I[y0 * W1 + x1 + 1] - I[(y1 + 1) * W1 + x0] + I[y0 * W1 + x0];
+      const media = suma / ((x1 - x0 + 1) * (y1 - y0 + 1));
+      const i = (y * w + x) * 4;
+      const v = d[i] > media - 12 ? 255 : 0;
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+function copiaCanvas(c) {
+  const o = document.createElement('canvas');
+  o.width = c.width; o.height = c.height;
+  o.getContext('2d').drawImage(c, 0, 0);
+  return o;
+}
+
+/** Lee la imagen con varias pasadas (gris, binarizada, otra segmentación) y para apenas tiene los tres datos claros. */
+async function leerEtiqueta(canvas, progreso) {
+  const w = await motorOcr();
+  const gris = realzar(escalarCanvas(canvas, Math.max(1400, Math.min(2000, Math.max(canvas.width, canvas.height)))));
+  const pasadas = [() => [gris, '11'], () => [binarizar(copiaCanvas(gris)), '11'], () => [gris, '6']];
+  if (Math.max(canvas.width, canvas.height) > 2600) pasadas.splice(1, 0, () => [realzar(escalarCanvas(canvas, 3000)), '11']);
+  const textos = [];
+  let palabras = [], dim = { w: gris.width, h: gris.height }, cand = { marca: [], modelo: [], serie: [] };
+  for (let i = 0; i < pasadas.length; i++) {
+    progreso(i + 1, pasadas.length);
+    await new Promise(r => setTimeout(r, 20));
+    const [cv, psm] = pasadas[i]();
+    await w.setParameters({ tessedit_pageseg_mode: psm });
+    const { data } = await w.recognize(cv);
+    textos.push(data.text || '');
+    if (i === 0) palabras = (data.words || []).filter(p => p.text && p.text.trim() && p.bbox).map(p => ({ t: p.text.trim(), b: p.bbox, c: p.confidence }));
+    cand = analizarTexto(textos.join('\n'));
+    if (cand.marca.length && cand.marca[0][1] >= 20 && cand.modelo.length && cand.modelo[0][1] >= 20 && cand.serie.length && cand.serie[0][1] >= 20) break;
+  }
+  return { cand, palabras, dim };
+}
+
+/* ── Interfaz ── */
+
+function escCamaraHTML() {
+  return '<div class="esc">' +
+    '<header class="esc-cab"><h2>Leer etiqueta</h2><button class="btn sec chico" type="button" data-accion="esc-cerrar">Cerrar</button></header>' +
+    '<div class="esc-visor"><video playsinline muted autoplay></video><div class="esc-guia"></div>' +
+      '<p class="esc-ayuda">Encuadrá la etiqueta dentro del recuadro, cerca y con buena luz</p></div>' +
+    '<div class="esc-zoom" hidden><span>Zoom</span><input type="range" aria-label="Zoom"></div>' +
+    '<div class="esc-barra">' +
+      '<button class="btn sec" type="button" data-accion="esc-galeria">Galería</button>' +
+      '<button class="btn esc-obturador" type="button" data-accion="esc-capturar">Capturar</button>' +
+      '<button class="btn sec" type="button" data-accion="esc-linterna" hidden>Linterna</button>' +
+    '</div>' +
+    '<input type="file" accept="image/*" class="esc-archivo" hidden>' +
+  '</div>';
+}
+
+async function abrirEscaner(campoEl, tipo) {
   const form = campoEl.closest('form');
-  const input = campoEl.querySelector('.con-boton input');
-  const res = campoEl.querySelector('.foto-res');
-  const boton = campoEl.querySelector('[data-accion="foto-campo"]');
-  boton.disabled = true;
-  try {
-    let porBarras = [];
-    if (tipo === 'serie') {
-      mostrarResultadoFoto(res, 'leyendo', '', [], 'Buscando un código de barras…');
-      porBarras = await codigoDeBarras(file);
-    }
-    let cand;
-    if (porBarras.length) {
-      cand = { marca: [], modelo: [], serie: [[porBarras[0], 30]] };
-    } else {
-      mostrarResultadoFoto(res, 'leyendo', '', [], SERIE.ocr ? 'Leyendo el texto de la foto…' : 'Leyendo el texto de la foto. La primera vez tarda unos segundos más…');
-      const canvas = realzar(await imagenACanvas(file, 2000));
-      const w = await motorOcr();
-      const { data } = await w.recognize(canvas);
-      cand = analizarTexto(data.text || '');
-    }
-    const propios = cand[tipo].map(x => x[0]);
-    if (!propios.length) {
-      const que = tipo === 'serie' ? 'un número de serie' : tipo === 'modelo' ? 'un modelo' : 'una marca';
-      mostrarResultadoFoto(res, 'vacio', '', [], 'No encontré ' + que + ' en la foto. Probá de nuevo más cerca, con buena luz y sin reflejos, o escribilo a mano.');
-      return;
-    }
-    input.value = propios[0];
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+  if (!form) return;
+  if (S.camara) await detenerCamara();
+  ESC.form = form; ESC.tipo = tipo; ESC.activo = tipo;
+  ESC.slots = { marca: form.elements.marca.value.trim(), modelo: form.elements.modelo.value.trim(), serie: form.elements.serie.value.trim() };
+  const d = dlgEsc();
+  d.innerHTML = escCamaraHTML();
+  d.showModal();
+  iniciarCamaraEsc();
+}
 
-    // Si la foto era de la etiqueta completa, completa también los otros casilleros que estén vacíos y tengan un dato claro.
-    const tambien = [];
-    ['marca', 'modelo', 'serie'].forEach(t => {
-      if (t === tipo || !cand[t].length || cand[t][0][1] < 20) return;
-      const otro = form && form.elements[t];
-      if (otro && !otro.value.trim()) { otro.value = cand[t][0][0]; tambien.push(ROTULO_CAMPO[t]); }
-    });
-    const porTexto = !porBarras.length;
-    const aviso = (porBarras.length ? 'Se leyó del código de barras. ' : '') +
-      (tambien.length ? 'También completé: ' + tambien.join(' y ') + '. ' : '') +
-      (porTexto ? 'El texto de una foto puede confundir O/0, I/1 o S/5: comparalo con la etiqueta antes de guardar.' : '');
-    mostrarResultadoFoto(res, 'ok', 'Leído: ' + propios[0] + '.', propios.slice(1, 5), aviso.trim());
+async function iniciarCamaraEsc() {
+  const d = dlgEsc(), v = $('video', d);
+  const ayuda = $('.esc-ayuda', d);
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    ayuda.textContent = 'La cámara en vivo necesita una página con HTTPS. Usá Galería para elegir o sacar una foto.';
+    $('[data-accion="esc-capturar"]', d).disabled = true;
+    return;
+  }
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1440 } }, audio: false });
+    if (!d.open) { s.getTracks().forEach(t => t.stop()); return; }
+    ESC.stream = s; ESC.track = s.getVideoTracks()[0];
+    v.srcObject = s;
+    await v.play().catch(() => {});
+    const caps = ESC.track.getCapabilities ? ESC.track.getCapabilities() : {};
+    try { if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0) await ESC.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) { /* sin enfoque continuo */ }
+    if (caps.torch) $('[data-accion="esc-linterna"]', d).hidden = false;
+    if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+      const z = $('.esc-zoom', d), r = $('input', z);
+      r.min = caps.zoom.min; r.max = caps.zoom.max; r.step = caps.zoom.step || 0.1; r.value = caps.zoom.min;
+      r.addEventListener('input', () => { try { ESC.track.applyConstraints({ advanced: [{ zoom: Number(r.value) }] }); } catch (e) { /* nada */ } });
+      z.hidden = false;
+    }
   } catch (err) {
-    mostrarResultadoFoto(res, 'vacio', '', [], 'No pude leer la foto' + (navigator.onLine === false && !SERIE.ocr ? ' (la primera vez necesita conexión para preparar el lector)' : '') + '. Escribí ' + NOMBRE_CAMPO[tipo] + ' a mano.');
-  } finally {
-    boton.disabled = false;
+    ayuda.textContent = 'No pude abrir la cámara. Revisá el permiso del navegador o usá Galería.';
+    $('[data-accion="esc-capturar"]', d).disabled = true;
   }
 }
 
-document.addEventListener('change', ev => {
-  const inp = ev.target.closest && ev.target.closest('.foto-input');
-  if (!inp || !inp.files || !inp.files[0]) return;
-  leerCampoDeFoto(inp.files[0], inp.closest('.campo'), inp.dataset.tipo);
+function detenerEscaner() {
+  if (ESC.stream) ESC.stream.getTracks().forEach(t => t.stop());
+  ESC.stream = null; ESC.track = null;
+}
+
+/** Recorta del video lo que está dentro del recuadro de encuadre, a la resolución real de la cámara. */
+function capturarRecuadro() {
+  const d = dlgEsc(), v = $('video', d);
+  if (!v || !v.videoWidth) return null;
+  const vis = $('.esc-visor', d).getBoundingClientRect(), g = $('.esc-guia', d).getBoundingClientRect();
+  const k = Math.max(vis.width / v.videoWidth, vis.height / v.videoHeight);
+  const ox = (v.videoWidth * k - vis.width) / 2, oy = (v.videoHeight * k - vis.height) / 2;
+  const sx = Math.max(0, ((g.left - vis.left) + ox) / k), sy = Math.max(0, ((g.top - vis.top) + oy) / k);
+  const sw = Math.min(v.videoWidth - sx, g.width / k), sh = Math.min(v.videoHeight - sy, g.height / k);
+  const c = document.createElement('canvas');
+  c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+
+function escLeyendoHTML(canvas, texto) {
+  return '<div class="esc"><header class="esc-cab"><h2>Leyendo…</h2></header>' +
+    '<div class="esc-leyendo"><img alt="Foto capturada" src="' + canvas.toDataURL('image/jpeg', 0.8) + '"><p class="esc-estado" role="status"><span class="girando" aria-hidden="true"></span> <span>' + esc(texto) + '</span></p></div></div>';
+}
+
+async function procesarFotoEsc(canvas) {
+  const d = dlgEsc();
+  detenerEscaner();
+  d.innerHTML = escLeyendoHTML(canvas, 'Preparando el lector. La primera vez tarda unos segundos más…');
+  let res = { cand: { marca: [], modelo: [], serie: [] }, palabras: [], dim: { w: canvas.width, h: canvas.height } }, aviso = '';
+  try {
+    const porBarras = await codigoDeBarras(canvas, ESC.tipo === 'serie');
+    res = await leerEtiqueta(canvas, (n, total) => {
+      const t = $('.esc-estado span:last-child', d);
+      if (t) t.textContent = 'Leyendo el texto de la foto (' + n + ' de ' + total + ')…';
+    });
+    if (porBarras.length) res.cand.serie.unshift([porBarras[0], 30]);
+  } catch (err) {
+    aviso = 'No pude leer el texto (la primera vez necesita conexión para preparar el lector). Podés tocar el casillero y escribir.';
+  }
+  ESC.cand = { marca: res.cand.marca.map(x => x[0]), modelo: res.cand.modelo.map(x => x[0]), serie: res.cand.serie.map(x => x[0]) };
+  const umbral = { marca: 20, modelo: 3, serie: 3 };
+  ['marca', 'modelo', 'serie'].forEach(t => {
+    const mejor = res.cand[t][0];
+    if (!mejor) return;
+    if (t === ESC.tipo) ESC.slots[t] = mejor[0];
+    else if (!ESC.slots[t] && mejor[1] >= umbral[t]) ESC.slots[t] = mejor[0];
+  });
+  if (!ESC.slots[ESC.tipo] && !aviso) aviso = 'No encontré ' + ROTULO_CAMPO[ESC.tipo].toLowerCase() + ' en la foto. Tocá una palabra de la imagen, probá de nuevo más cerca o escribilo.';
+  if (!d.open) return;
+  d.innerHTML = escResultadoHTML(canvas, res, aviso);
+}
+
+function escResultadoHTML(canvas, res, aviso) {
+  const w = res.dim.w, h = res.dim.h;
+  const cajas = res.palabras.map((p, i) => {
+    const x = p.b.x0 / w * 100, y = p.b.y0 / h * 100, ancho = (p.b.x1 - p.b.x0) / w * 100, alto = (p.b.y1 - p.b.y0) / h * 100;
+    return '<button type="button" class="esc-pal" data-accion="esc-palabra" data-t="' + esc(p.t) + '" style="left:' + x.toFixed(2) + '%;top:' + y.toFixed(2) + '%;width:' + ancho.toFixed(2) + '%;height:' + alto.toFixed(2) + '%" aria-label="' + esc(p.t) + '"></button>';
+  }).join('');
+  const slots = ['marca', 'modelo', 'serie'].map(t =>
+    '<div class="esc-slot" data-slot="' + t + '" aria-current="' + (ESC.activo === t) + '">' +
+      '<label><span>' + ROTULO_CAMPO[t] + '</span><input type="text" data-slot-input="' + t + '" value="' + esc(ESC.slots[t]) + '" autocomplete="off"></label>' +
+      '<button class="btn sec chico" type="button" data-accion="esc-borrar" data-slot="' + t + '" aria-label="Borrar ' + ROTULO_CAMPO[t] + '">×</button></div>').join('');
+  return '<div class="esc">' +
+    '<header class="esc-cab"><h2>Elegí los datos</h2><button class="btn sec chico" type="button" data-accion="esc-cerrar">Cerrar</button></header>' +
+    '<div class="esc-cuerpo">' +
+      '<div class="esc-foto"><img alt="Foto de la etiqueta" src="' + canvas.toDataURL('image/jpeg', 0.85) + '"><div class="esc-cajas">' + cajas + '</div></div>' +
+      '<p class="suave esc-nota">Tocá un casillero y después las palabras de la foto que corresponden. También podés escribir o corregir.</p>' +
+      '<div class="esc-slots">' + slots + '</div>' +
+      '<div class="esc-sug" data-sug></div>' +
+      (aviso ? '<p class="aviso">' + esc(aviso) + '</p>' : '') +
+      '<p class="suave esc-nota">El texto leído de una foto puede confundir O con 0, I con 1 o S con 5: comparalo con la etiqueta.</p>' +
+    '</div>' +
+    '<div class="esc-barra"><button class="btn sec" type="button" data-accion="esc-otra">Sacar otra</button>' +
+    '<button class="btn" type="button" data-accion="esc-usar">Usar estos datos</button></div></div>';
+}
+
+function escRefrescar() {
+  const d = dlgEsc();
+  $$('.esc-slot', d).forEach(s => s.setAttribute('aria-current', String(s.dataset.slot === ESC.activo)));
+  $$('[data-slot-input]', d).forEach(i => { if (i !== document.activeElement) i.value = ESC.slots[i.dataset.slotInput]; });
+  const sug = $('[data-sug]', d);
+  if (sug) {
+    const lista = ESC.cand[ESC.activo].filter(v => v !== ESC.slots[ESC.activo]).slice(0, 6);
+    sug.innerHTML = lista.length
+      ? '<span>Posibles para ' + esc(ROTULO_CAMPO[ESC.activo]) + ':</span>' + lista.map(v => '<button type="button" class="etiqueta-chip" data-accion="esc-sugerencia" data-valor="' + esc(v) + '">' + esc(v) + '</button>').join('')
+      : '';
+  }
+}
+
+function escAccion(a, btn) {
+  const d = dlgEsc();
+  switch (a) {
+    case 'esc-cerrar': d.close(); break;
+    case 'esc-capturar': {
+      const c = capturarRecuadro();
+      if (!c) { toast('La cámara todavía no está lista.', 'error'); break; }
+      procesarFotoEsc(c);
+      break;
+    }
+    case 'esc-galeria': $('.esc-archivo', d).click(); break;
+    case 'esc-linterna': {
+      ESC.linterna = !ESC.linterna;
+      try { ESC.track.applyConstraints({ advanced: [{ torch: ESC.linterna }] }); } catch (e) { toast('Este dispositivo no permite encender la linterna.', 'error'); }
+      break;
+    }
+    case 'esc-otra': d.innerHTML = escCamaraHTML(); iniciarCamaraEsc(); break;
+    case 'esc-palabra': {
+      const t = (btn.dataset.t || '').replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+      if (!t) break;
+      const k = ESC.activo;
+      ESC.slots[k] = ESC.slots[k] ? ESC.slots[k] + (k === 'serie' ? '' : ' ') + t : t;
+      btn.classList.add('usada');
+      escRefrescar();
+      break;
+    }
+    case 'esc-sugerencia': ESC.slots[ESC.activo] = btn.dataset.valor; escRefrescar(); break;
+    case 'esc-borrar': ESC.slots[btn.dataset.slot] = ''; ESC.activo = btn.dataset.slot; escRefrescar(); break;
+    case 'esc-usar': {
+      const f = ESC.form;
+      ['marca', 'modelo', 'serie'].forEach(t => {
+        const v = String(ESC.slots[t] || '').trim();
+        if (v && f && f.elements[t]) { f.elements[t].value = v; f.elements[t].dispatchEvent(new Event('input', { bubbles: true })); }
+      });
+      d.close();
+      toast('Datos cargados. Revisalos antes de guardar.');
+      break;
+    }
+  }
+}
+
+document.addEventListener('click', ev => {
+  const d = dlgEsc();
+  if (!d || !d.open || !d.contains(ev.target)) return;
+  const slot = ev.target.closest('.esc-slot');
+  if (slot && !ev.target.closest('[data-accion]')) { ESC.activo = slot.dataset.slot; escRefrescar(); }
 });
+document.addEventListener('input', ev => {
+  const i = ev.target.closest && ev.target.closest('[data-slot-input]');
+  if (i) { ESC.slots[i.dataset.slotInput] = i.value; ESC.activo = i.dataset.slotInput; $$('.esc-slot', dlgEsc()).forEach(s => s.setAttribute('aria-current', String(s.dataset.slot === ESC.activo))); }
+});
+document.addEventListener('focusin', ev => {
+  const i = ev.target.closest && ev.target.closest('[data-slot-input]');
+  if (i) { ESC.activo = i.dataset.slotInput; escRefrescar(); }
+});
+document.addEventListener('change', async ev => {
+  const inp = ev.target.closest && ev.target.closest('.esc-archivo');
+  if (!inp || !inp.files || !inp.files[0]) return;
+  try { procesarFotoEsc(await imagenACanvas(inp.files[0], 3200)); } catch (e) { toast('No pude abrir esa foto.', 'error'); }
+});
+dlgEsc() && dlgEsc().addEventListener('close', () => { detenerEscaner(); ESC.linterna = false; });
+
 
 let ultimoCamara = { t: '', ms: 0 };
 function alLeerCamara(txt) {
@@ -1128,13 +1333,8 @@ async function accion(btn) {
     case 'ficha': if (e) abrirFichaDlg(id); break;
     case 'cerrar': cerrarDlg(); break;
     case 'cancelar-form': finForm(); break;
-    case 'foto-campo': { const inp = btn.closest('.campo').querySelector('.foto-input'); inp.value = ''; inp.click(); break; }
-    case 'usar-foto': {
-      const cp = btn.closest('.campo');
-      cp.querySelector('.con-boton input').value = btn.dataset.valor;
-      cp.querySelector('.foto-res').hidden = true;
-      break;
-    }
+    case 'foto-campo': await abrirEscaner(btn.closest('.campo'), btn.dataset.tipo); break;
+    case 'esc-cerrar': case 'esc-capturar': case 'esc-galeria': case 'esc-linterna': case 'esc-otra': case 'esc-palabra': case 'esc-sugerencia': case 'esc-borrar': case 'esc-usar': escAccion(a, btn); break;
     case 'nuevo': S.volverFicha = null; abrirDlg(formEquipo(null)); break;
     case 'editar': if (e) { volver(); abrirDlg(formEquipo(e)); } break;
     case 'mover':

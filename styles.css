@@ -333,3 +333,36 @@ dialog { border: 1px solid var(--linea); }
   .toast { animation: entra .18s ease-out; }
   @keyframes entra { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 }
+
+/* ── Escáner de etiqueta ── */
+#dlgEscaner { width: min(46rem, 100%); height: min(100dvh, 52rem); max-height: 100dvh; }
+@media (max-width: 40rem) { #dlgEscaner { width: 100%; height: 100dvh; border-radius: 0; } }
+.esc { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.esc-cab { display: flex; align-items: center; justify-content: space-between; padding: .6rem .9rem; border-bottom: 1px solid var(--linea); }
+.esc-cab h2 { margin: 0; font-size: 1.1rem; }
+.esc-visor { position: relative; flex: 1; min-height: 0; background: #000; overflow: hidden; }
+.esc-visor video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.esc-guia { position: absolute; left: 7%; right: 7%; top: 31%; height: 38%; border: 2px solid var(--marca); border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .55); pointer-events: none; }
+.esc-ayuda { position: absolute; left: .8rem; right: .8rem; bottom: .6rem; margin: 0; text-align: center; font-size: .9rem; color: #fff; text-shadow: 0 1px 3px #000; }
+.esc-zoom { display: flex; gap: .6rem; align-items: center; padding: .4rem .9rem; }
+.esc-zoom input { flex: 1; }
+.esc-barra { display: flex; gap: .6rem; justify-content: space-between; align-items: center; padding: .7rem .9rem; border-top: 1px solid var(--linea); }
+.esc-barra .btn { flex: 1; }
+.esc-barra .esc-obturador { flex: 1.4; }
+.esc-leyendo { padding: 1rem; display: grid; gap: .8rem; overflow: auto; }
+.esc-leyendo img, .esc-foto img { width: 100%; display: block; border-radius: 8px; }
+.esc-estado { display: flex; gap: .5rem; align-items: center; margin: 0; }
+.esc-cuerpo { flex: 1; min-height: 0; overflow: auto; padding: .8rem .9rem; display: grid; gap: .7rem; align-content: start; }
+.esc-foto { position: relative; }
+.esc-cajas { position: absolute; inset: 0; }
+.esc-pal { position: absolute; padding: 0; background: rgba(255, 130, 0, .18); border: 1px solid rgba(255, 130, 0, .8); border-radius: 3px; min-width: 14px; min-height: 14px; cursor: pointer; }
+.esc-pal.usada { background: rgba(255, 130, 0, .5); }
+.esc-slots { display: grid; gap: .5rem; }
+.esc-slot { display: flex; gap: .4rem; align-items: end; padding: .4rem; border: 1px solid var(--linea); border-radius: 8px; }
+.esc-slot[aria-current="true"] { border-color: var(--marca); box-shadow: 0 0 0 1px var(--marca); }
+.esc-slot label { flex: 1; display: grid; gap: .2rem; font-size: .8rem; color: var(--tinta-2); }
+.esc-slot input { width: 100%; }
+.esc-sug { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; font-size: .85rem; }
+.esc-nota { margin: 0; font-size: .85rem; }
+.esc-foto { width: fit-content; max-width: 100%; margin: 0 auto; }
+.esc-foto img { width: auto; max-width: 100%; max-height: 38dvh; }

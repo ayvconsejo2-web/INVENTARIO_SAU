@@ -1,6 +1,6 @@
 // Guarda la aplicación para que abra aunque no haya señal.
 // Siempre intenta primero la red, así las actualizaciones se ven al instante cuando hay conexión.
-const VERSION = 'inventario-v2';
+const VERSION = 'inventario-v3';
 const BASE = [
   './', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-180.png',
